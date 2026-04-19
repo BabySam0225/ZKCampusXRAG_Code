@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 # ─────────────────────────────────────────────
 # 文档分块配置
 # ─────────────────────────────────────────────
@@ -16,7 +17,8 @@ load_dotenv()
 class ChunkConfig:
     chunk_size: int = 300
     chunk_overlap: int = 100
-    separators: list = field(default_factory=lambda: ["\n\n", "\n", "。", "！", "？", "；", "，", " "])
+    separators: list = field(default_factory=lambda: ["\n\n", "\n", "。", "！", "？", " ", ""])
+
 
 # ─────────────────────────────────────────────
 # Embedding 配置
@@ -36,6 +38,7 @@ class EmbeddingConfig:
     local_model: str = "BAAI/bge-large-zh-v1.5"
     local_device: str = "cpu"
 
+
 # ─────────────────────────────────────────────
 # BM25 配置
 # ─────────────────────────────────────────────
@@ -43,6 +46,7 @@ class EmbeddingConfig:
 class BM25Config:
     index_path: str = "./storage/bm25.pkl"
     language: str = "zh"
+
 
 # ─────────────────────────────────────────────
 # 混合检索配置
@@ -52,6 +56,7 @@ class SearchConfig:
     top_k_vector: int = 20
     top_k_bm25: int = 20
     top_k_merged: int = 20
+
 
 # ─────────────────────────────────────────────
 # Reranker 配置
@@ -67,20 +72,22 @@ class RerankerConfig:
     local_device: str = "cpu"
     top_k: int = 5
 
+
 # ─────────────────────────────────────────────
 # Query Rewriter 配置
 # ─────────────────────────────────────────────
 @dataclass
 class QueryRewriterConfig:
     mode: str = "api"
-    api_provider: str = "deepseek"
+    api_provider: str = "deepseek"                       # "deepseek" | "anthropic" | "openai"
     deepseek_model: str = "deepseek-chat"
     deepseek_base_url: str = "https://api.deepseek.com"
     anthropic_model: str = "claude-haiku-4-5"
     openai_model: str = "gpt-4o-mini"
-    num_sub_queries: int = 3
-    local_model: str = "Qwen/Qwen3-7B-Instruct"
+    num_sub_queries: int = 1    # 查询阶段用2个查询（主+1子）已足够，减少 API 调用
+    local_model: str = "deepseek-chat"
     local_device: str = "cuda"
+
 
 # ─────────────────────────────────────────────
 # Context Compression 配置
@@ -91,23 +98,25 @@ class CompressionConfig:
     max_tokens_per_chunk: int = 400
     local_model: str = "Qwen/Qwen3-7B-Instruct"
 
+
 # ─────────────────────────────────────────────
 # LLM 生成配置
 # ─────────────────────────────────────────────
 @dataclass
 class GeneratorConfig:
     mode: str = "api"
-    api_provider: str = "deepseek"
-    deepseek_model: str = "deepseek-chat"
-    deepseek_reasoner_model: str = "deepseek-reasoner"
+    api_provider: str = "deepseek"                       # "deepseek" | "anthropic" | "openai"
+    deepseek_model: str = "deepseek-chat"                # 普通对话
+    deepseek_reasoner_model: str = "deepseek-reasoner"  # 深度思考（R1）
     deepseek_base_url: str = "https://api.deepseek.com"
     anthropic_model: str = "claude-sonnet-4-5"
     openai_model: str = "gpt-4o"
     max_tokens: int = 1024
     temperature: float = 0.1
-    local_model: str = "Qwen/Qwen3-30B-A3B"
+    local_model: str = "deepseek-chat"
     local_device: str = "cuda"
     load_in_4bit: bool = True
+
 
 # ─────────────────────────────────────────────
 # 全局配置汇总
@@ -134,7 +143,7 @@ class RAGConfig:
         if self.embedding.api_provider == "bge" and not self.siliconflow_api_key:
             errors.append("❌ 缺少 SILICONFLOW_API_KEY（BGE Embedding 需要）")
         if self.embedding.api_provider == "openai" and not self.openai_api_key:
-            errors.append("❌ 缺少 OPENAI_API_KEY（openAI Embedding 需要）")
+            errors.append("❌ 缺少 OPENAI_API_KEY（OpenAI Embedding 需要）")
         if self.reranker.api_provider == "bge" and not self.siliconflow_api_key:
             errors.append("❌ 缺少 SILICONFLOW_API_KEY（BGE Reranker 需要）")
         if self.reranker.api_provider == "cohere" and not self.cohere_api_key:
@@ -147,10 +156,11 @@ class RAGConfig:
             errors.append("❌ 缺少 DEEPSEEK_API_KEY（LLM 生成需要）")
         if self.generator.api_provider == "anthropic" and not self.anthropic_api_key:
             errors.append("❌ 缺少 ANTHROPIC_API_KEY（LLM 生成需要）")
-
         if errors:
             print("\n".join(errors))
-            print("\n请在 .env 文件中配置上述 key，参考 .env.example")
+            print("\n请在 .env 文件中配置上述 Key，参考 .env.example")
             raise SystemExit(1)
 
+
+# 必须在所有 class 定义之后
 DEFAULT_CONFIG = RAGConfig()
