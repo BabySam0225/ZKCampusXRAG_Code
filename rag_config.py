@@ -80,11 +80,11 @@ class RerankerConfig:
 class QueryRewriterConfig:
     mode: str = "api"
     api_provider: str = "deepseek"                       # "deepseek" | "anthropic" | "openai"
-    deepseek_model: str = "deepseek-chat"
+    deepseek_model: str = "deepseek-v4-flash"
     deepseek_base_url: str = "https://api.deepseek.com"
     anthropic_model: str = "claude-haiku-4-5"
     openai_model: str = "gpt-4o-mini"
-    num_sub_queries: int = 1    # 查询阶段用2个查询（主+1子）已足够，减少 API 调用
+    num_sub_queries: int = 3    # 查询阶段用2个查询（主+1子）已足够，减少 API 调用
     local_model: str = "deepseek-chat"
     local_device: str = "cuda"
 
@@ -95,7 +95,7 @@ class QueryRewriterConfig:
 @dataclass
 class CompressionConfig:
     mode: str = "rule"
-    max_tokens_per_chunk: int = 400
+    max_tokens_per_chunk: int = 800
     local_model: str = "Qwen/Qwen3-7B-Instruct"
 
 
@@ -106,13 +106,13 @@ class CompressionConfig:
 class GeneratorConfig:
     mode: str = "api"
     api_provider: str = "deepseek"                       # "deepseek" | "anthropic" | "openai"
-    deepseek_model: str = "deepseek-chat"                # 普通对话
-    deepseek_reasoner_model: str = "deepseek-reasoner"  # 深度思考（R1）
+    deepseek_model: str = "deepseek-v4-pro"                # 普通对话
+    deepseek_reasoner_model: str = "deepseek-v4-pro"  # 深度思考（R1）
     deepseek_base_url: str = "https://api.deepseek.com"
     anthropic_model: str = "claude-sonnet-4-5"
     openai_model: str = "gpt-4o"
-    max_tokens: int = 1024
-    temperature: float = 0.1
+    max_tokens: int = 10240
+    temperature: float = 0.3
     local_model: str = "deepseek-chat"
     local_device: str = "cuda"
     load_in_4bit: bool = True

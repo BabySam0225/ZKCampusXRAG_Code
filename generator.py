@@ -1,19 +1,23 @@
 """
 generator.py — LLM 生成层
-支持多轮对话记忆： history 参数传入历史消息列表
+支持多轮对话记忆：history 参数传入历史消息列表
 """
 
 from dataclasses import dataclass, field
 from typing import List, Optional
+
 from rich.console import Console
+
 from rag_config import RAGConfig, DEFAULT_CONFIG
 
 console = Console()
+
 
 # ─────────────────────────────────────────────
 # Prompt 模板
 # ─────────────────────────────────────────────
 SYSTEM_PROMPT = """你是一个严格基于知识库回答问题的助手。
+
 核心规则：
 1. 你必须仅根据提供的【参考上下文】回答问题
 2. 如果上下文中没有足够信息，必须回答："未在知识库中找到相关信息"
@@ -29,6 +33,7 @@ ANSWER_PROMPT = """参考上下文：
 
 请基于以上上下文回答问题，并在回答中标注引用的来源编号（如 [来源 1]）。"""
 
+
 # ─────────────────────────────────────────────
 # 对话历史条目
 # ─────────────────────────────────────────────
@@ -39,17 +44,27 @@ class RAGAnswer:
     sources: List[dict]
     model: str
 
+
 def _build_messages(
     question: str,
     context: str,
-    history: List[dict],
+    history: List[dict],  # [{"role": "user/assistant", "content": "..."}, ...]
 ) -> List[dict]:
+    """
+    组装发给 LLM 的完整消息列表：
+      system
+      [历史 user/assistant 轮次]   ← 让 LLM 知道之前聊了什么
+      当前 user（含检索到的上下文）
+    """
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    MAX_HISTORY = 6
+    # 加入历史（最多保留最近 MAX_HISTORY 轮，避免 token 爆炸）
+    MAX_HISTORY = 12  # 3轮问答 = 6条消息
     messages.extend(history[-MAX_HISTORY:])
+    # 当前问题（带上下文）
     prompt = ANSWER_PROMPT.format(context=context, question=question)
     messages.append({"role": "user", "content": prompt})
     return messages
+
 
 # ─────────────────────────────────────────────
 # DeepSeek API 生成
@@ -65,9 +80,14 @@ class DeepSeekGenerator:
         )
         self.cfg = config.generator
 
-    def generate(self, question: str, context: str, history: List[dict], stream: bool = True, enable_thinking: bool = False) -> str:
+    def generate(self, question: str, context: str, history: List[dict],
+                 stream: bool = True, enable_thinking: bool = False) -> str:
+        
         model = self.cfg.deepseek_reasoner_model if enable_thinking else self.cfg.deepseek_model
         messages = _build_messages(question, context, history)
+
+        # 新版 DeepSeek 模型默认开启思考，必须显式传 enable_thinking 才能控制
+        extra = {"extra_body": {"enable_thinking": enable_thinking}}
 
         if stream:
             response = self.client.chat.completions.create(
@@ -76,7 +96,7 @@ class DeepSeekGenerator:
                 max_tokens=self.cfg.max_tokens,
                 temperature=self.cfg.temperature,
                 stream=True,
-                # enable_thinking={"enable_thinking" : enable_thinking},
+                **extra,
             )
             full = ""
             in_thinking = False
@@ -85,7 +105,8 @@ class DeepSeekGenerator:
                 delta = chunk.choices[0].delta
                 thinking = getattr(delta, "reasoning_content", None) or ""
                 content_text = delta.content or ""
-                if thinking:
+                # enable_thinking=False 时直接忽略 reasoning_content，不输出
+                if thinking and enable_thinking:
                     if not in_thinking:
                         print("\n\033[2m[深度思考] ", end="", flush=True)
                         in_thinking = True
@@ -104,8 +125,10 @@ class DeepSeekGenerator:
                 messages=messages,
                 max_tokens=self.cfg.max_tokens,
                 temperature=self.cfg.temperature,
+                **extra,
             )
             return response.choices[0].message.content
+
 
 # ─────────────────────────────────────────────
 # Anthropic API 生成
@@ -116,7 +139,7 @@ class AnthropicGenerator:
         self.client = anthropic.Anthropic(api_key=config.anthropic_api_key)
         self.cfg = config.generator
 
-    def generate(self, question: str, context: str, history: List[dict], stream: bool = True) -> str:
+    def generate(self, question: str, context: str, history: List[dict], stream: bool = False) -> str:
         messages = _build_messages(question, context, history)
         system = messages[0]["content"]
         user_messages = messages[1:]
@@ -143,6 +166,7 @@ class AnthropicGenerator:
             )
             return response.content[0].text
 
+
 # ─────────────────────────────────────────────
 # OpenAI API 生成
 # ─────────────────────────────────────────────
@@ -156,7 +180,7 @@ class OpenAIGenerator:
         )
         self.cfg = config.generator
 
-    def generate(self, question: str, context: str, history: List[dict], stream: bool = True) -> str:
+    def generate(self, question: str, context: str, history: List[dict], stream: bool = False) -> str:
         messages = _build_messages(question, context, history)
         if stream:
             response = self.client.chat.completions.create(
@@ -183,6 +207,7 @@ class OpenAIGenerator:
             )
             return response.choices[0].message.content
 
+
 # ─────────────────────────────────────────────
 # 本地模型生成
 # ─────────────────────────────────────────────
@@ -199,10 +224,10 @@ class LocalGenerator:
         import torch
         console.print(f"[cyan]加载生成模型: {self.cfg.local_model}[/cyan]")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.cfg.local_model,
-            trust_remote_code=True
+            self.cfg.local_model, trust_remote_code=True
         )
-        quant_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16) if self.cfg.load_in_4bit else None
+        quant_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16) \
+            if self.cfg.load_in_4bit else None
         self.model = AutoModelForCausalLM.from_pretrained(
             self.cfg.local_model,
             device_map="auto",
@@ -215,9 +240,7 @@ class LocalGenerator:
         import torch
         messages = _build_messages(question, context, history)
         text = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True
         )
         inputs = self.tokenizer(text, return_tensors="pt").to("cuda")
         with torch.no_grad():
@@ -228,9 +251,9 @@ class LocalGenerator:
                 do_sample=(self.cfg.temperature > 0),
             )
         return self.tokenizer.decode(
-            outputs[0][inputs["input_ids"].shape[1]:],
-            skip_special_tokens=True
+            outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
         ).strip()
+
 
 # ─────────────────────────────────────────────
 # 统一生成接口
@@ -255,14 +278,16 @@ class Generator:
         compressed_chunks: List[dict],
         history: List[dict] = None,
         stream: bool = True,
-        enable_thinking: bool = False,
+        enable_thinking: bool = False,   # True 时切换到 deepseek-reasoner（R1）
     ) -> RAGAnswer:
         console.print(
-            f"\n[bold cyan]🔧 LLM 生成[/bold cyan]"
+            f"\n[bold cyan]🤖 LLM 生成[/bold cyan]"
             + (" [yellow]（深度思考 R1）[/yellow]" if enable_thinking else "") + "..."
         )
         answer = self._backend.generate(
-            question, context, history or [], stream=stream, enable_thinking=enable_thinking
+            question, context, history or [],
+            stream=stream,
+            enable_thinking=enable_thinking,
         )
         model_name = (
             self.cfg.deepseek_model if self.cfg.api_provider == "deepseek"
