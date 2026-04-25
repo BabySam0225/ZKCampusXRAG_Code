@@ -1,7 +1,7 @@
 """
 query_rewriter.py — 查询改写层
-支持： 本地 Qwen3-7B / Anthropic API / OpenAI API
-输出： main_query + sub_queries（ JSON 格式）
+支持：本地 Qwen3-7B / Anthropic API / OpenAI API
+输出：main_query + sub_queries（JSON 格式）
 """
 
 import json
@@ -15,17 +15,26 @@ from rag_config import RAGConfig, DEFAULT_CONFIG
 
 console = Console()
 
-REWRITE_PROMPT = """你是一个专业的问题改写助手，请将用户问题改写为更适合检索的形式。
-要求：
-1.	main_query：将问题改写得更清晰、结构化，补充可能缺失的上下文
-2.	sub_queries：生成 {num} 个语义相关但表达方式不同的查询（换词、换角度、换问法）
 
-用户问题： {question}
+REWRITE_PROMPT = """你是一个专业的问题改写助手，负责将用户问题改写为适合知识库检索的独立查询。
+
+【对话历史】（最近几轮，帮助理解用户意图）
+{history}
+
+【当前问题】
+{question}
+
+改写规则：
+1. 如果当前问题是模糊引用（"那个"、"刚才说的"、"这个呢"、"还有呢"），
+   必须结合历史还原成完整独立的问题，让它脱离历史也能被检索
+2. main_query：改写后的主查询，必须是完整独立的句子，包含所有必要的实体和主题
+3. sub_queries：生成 {num} 个表达方式不同的查询（换角度、换词、细化问题）
+4. 所有查询都不能依赖对话历史，必须自包含
 
 请严格输出 JSON，不要输出任何其他内容：
 {{
-    "main_query": "改写后的主查询",
-    "sub_queries": ["子查询1", "子查询2", "子查询3"]
+  "main_query": "改写后的完整主查询",
+  "sub_queries": ["子查询1", "子查询2"]
 }}"""
 
 
@@ -43,8 +52,9 @@ class RewriteResult:
 # ─────────────────────────────────────────────
 def _parse_rewrite_output(text: str, original: str, num: int) -> RewriteResult:
     """健壮解析 LLM JSON 输出，失败时返回原始查询"""
+
     # 第一步：清理文本
-    # 去掉 markdown 代码块标记（ ```json ... ``` 或 ``` ... ```）
+    # 去掉 markdown 代码块标记（```json ... ``` 或 ``` ... ```）
     text = re.sub(r"```(?:json)?\s*", "", text).strip()
     # 去掉开头结尾的换行和空白
     text = text.strip()
@@ -97,6 +107,7 @@ class DeepSeekQueryRewriter:
     只需设置 base_url 和 api_key，其余与 OpenAI 调用方式完全相同
     价格约为 GPT-4o 的 1/30，中文 Query Rewrite 效果优秀
     """
+
     def __init__(self, config: RAGConfig = DEFAULT_CONFIG):
         import httpx
         from openai import OpenAI
@@ -107,8 +118,23 @@ class DeepSeekQueryRewriter:
         )
         self.cfg = config.query_rewriter
 
-    def rewrite(self, question: str) -> RewriteResult:
-        prompt = REWRITE_PROMPT.format(question=question, num=self.cfg.num_sub_queries)
+    def rewrite(self, question: str,
+                history: list = None) -> RewriteResult:
+        # 把历史最近4条（2轮）格式化成文本，帮助模型理解上下文
+        history_text = "无"
+        if history:
+            recent = history[-4:]
+            lines = []
+            for msg in recent:
+                role = "用户" if msg["role"] == "user" else "助手"
+                lines.append(f"{role}：{msg['content'][:80]}")
+            history_text = "\n".join(lines)
+
+        prompt = REWRITE_PROMPT.format(
+            question=question,
+            history=history_text,
+            num=self.cfg.num_sub_queries,
+        )
         try:
             response = self.client.chat.completions.create(
                 model=self.cfg.deepseek_model,
@@ -116,6 +142,7 @@ class DeepSeekQueryRewriter:
                 max_tokens=512,
                 temperature=0.3,
                 response_format={"type": "json_object"},
+                extra_body={"enable_thinking": False},
             )
             text = response.choices[0].message.content or ""
         except Exception as e:
@@ -125,8 +152,6 @@ class DeepSeekQueryRewriter:
                 sub_queries=[question] * self.cfg.num_sub_queries
             )
         return _parse_rewrite_output(text, question, self.cfg.num_sub_queries)
-
-
 class LocalQueryRewriter:
     def __init__(self, config: RAGConfig = DEFAULT_CONFIG):
         self.cfg = config.query_rewriter
@@ -177,7 +202,7 @@ class AnthropicQueryRewriter:
         prompt = REWRITE_PROMPT.format(question=question, num=self.cfg.num_sub_queries)
         # 使用 Haiku：改写任务简单，Haiku 速度快、成本低
         response = client.messages.create(
-            model=self.cfg.anthropic_model,
+            model=self.cfg.anthropic_model,   # claude-haiku-4-5
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -214,11 +239,12 @@ class OpenAIQueryRewriter:
 class QueryRewriter:
     """
     统一接口，根据 config.query_rewriter.api_provider 自动路由：
-    "deepseek"   → DeepSeek API（默认）
-    "anthropic"  → Claude Haiku
-    "openai"     → GPT-4o-mini
-    "local"      → 本地 Qwen3-7B
+      "deepseek"  → DeepSeek API（默认）
+      "anthropic" → Claude Haiku
+      "openai"    → GPT-4o-mini
+      "local"     → 本地 Qwen3-7B
     """
+
     def __init__(self, config: RAGConfig = DEFAULT_CONFIG):
         self.cfg = config.query_rewriter
         provider = self.cfg.api_provider if self.cfg.mode == "api" else "local"
@@ -231,10 +257,11 @@ class QueryRewriter:
         else:
             self._backend = LocalQueryRewriter(config)
 
-    def rewrite(self, question: str) -> RewriteResult:
+    def rewrite(self, question: str,
+                history: list = None) -> RewriteResult:
         console.print(f"\n[bold cyan]🔄 Query Rewrite[/bold cyan]: {question}")
-        result = self._backend.rewrite(question)
-        console.print(f" main_query: [green]{result.main_query}[/green]")
+        result = self._backend.rewrite(question, history=history or [])
+        console.print(f"  main_query: [green]{result.main_query}[/green]")
         for i, q in enumerate(result.sub_queries):
-            console.print(f" sub_query [{i+1}]: {q}")
+            console.print(f"  sub_query [{i+1}]: {q}")
         return result

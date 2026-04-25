@@ -132,8 +132,8 @@ class RAGPipeline:
         console.print(Panel(f"[bold white]❓ 用户问题[/bold white]\n{question}"))
         t0 = time.time()
 
-        # ── Step 1: Query Rewrite ──────────────
-        rewrite_result = self.query_rewriter.rewrite(question)
+        # ── Step 1: Query Rewrite（传入历史，让模糊问题得到补全）──
+        rewrite_result = self.query_rewriter.rewrite(question, history=history or [])
         all_queries = rewrite_result.all_queries()
 
         # ── Step 2: Hybrid Search ──────────────
