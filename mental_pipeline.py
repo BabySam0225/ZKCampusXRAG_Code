@@ -202,7 +202,7 @@ class MentalPipeline:
         # ── Step 3: 检索相关知识 ──────────────
         context = ""
         try:
-            rewrite_result = self.query_rewriter.rewrite(question)
+            rewrite_result = self.query_rewriter.rewrite(question, history=history or [])
             all_queries = rewrite_result.all_queries()
             candidates = self.retriever.multi_query_search(all_queries)
             if candidates:
